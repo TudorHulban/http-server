@@ -12,6 +12,7 @@ vendor/
 *.log
 *.tmp
 *.out
+*.png
 
 # IDE/editor settings and files
 .vscode/

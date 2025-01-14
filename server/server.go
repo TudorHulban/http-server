@@ -82,16 +82,13 @@ func (s *Server) Run(address string) error {
 func (s *Server) handleConnection(conn *connection) {
 	defer conn.Close()
 
-	// Set a read deadline for idle connections
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
 	for {
 		if errOnTraffic := s.onTraffic(conn); errOnTraffic != nil {
 			break
 		}
 
-		// Reset the timeout after successful activity
-		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		// Set a read deadline for idle connections
+		_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	}
 }
 
@@ -148,14 +145,14 @@ func (s *Server) onTraffic(conn *connection) error {
 		return nil // Don't close the connection on a bad request
 	}
 
-	go func() {
-		fmt.Printf(
-			"IP: %s, Method: %s, Path: %s\n",
-			getClientIP(request),
-			request.Method,
-			request.URL.Path,
-		)
-	}()
+	// go func() {
+	// 	fmt.Printf(
+	// 		"IP: %s, Method: %s, Path: %s\n",
+	// 		getClientIP(request),
+	// 		request.Method,
+	// 		request.URL.Path,
+	// 	)
+	// }()
 
 	_, _ = conn.Write(s.SendStatus(http.StatusOK))
 

@@ -64,6 +64,44 @@ Status code distribution:
 ## Test HTTPS
 
 ```sh
-curl -k -v https://localhost:443
-curl -k -H "X-Forwarded-For: 192.168.1.100" https://localhost:443/
+hey -z 3s -c 50 https://localhost:1043
+
+curl -k -v https://localhost:1043
+curl -k -H "X-Forwarded-For: 192.168.1.100" https://localhost:1043/
+```
+
+## Profiling
+
+### Add pprof
+
+Import in main.go:
+
+```sh
+_ "net/http/pprof"
+```
+
+### Setting up debug endpoint
+
+Add to main.go:
+
+```sh
+go func() {
+log.Println(http.ListenAndServe("localhost:6060", nil))
+}()
+```
+
+### Operate
+
+Start the application and capture debug data with:
+
+```sh
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=10
+```
+
+Understand CPU intensive processes with `top5 --cum` or `top10`.
+
+### Resources profiling
+
+```html
+https://thelinuxcode.com/profile-go-with-pprof/
 ```
