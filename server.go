@@ -1,45 +1,61 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Server struct {
 	bufferPool sync.Pool
+	tlsConfig  *tls.Config
 }
 
-func NewServer() *Server {
+func NewServer(certFile, keyFile string) (*Server, error) {
+	cert, errLoadX509 := tls.LoadX509KeyPair(certFile, keyFile)
+	if errLoadX509 != nil {
+		return nil,
+			fmt.Errorf("load x509 key pair: %w", errLoadX509)
+	}
+
 	return &Server{
-		bufferPool: sync.Pool{
-			New: func() interface{} {
-				return bytes.NewBuffer(nil)
+			bufferPool: sync.Pool{
+				New: func() interface{} {
+					return bytes.NewBuffer(nil)
+				},
+			},
+
+			tlsConfig: &tls.Config{
+				Certificates: []tls.Certificate{cert},
 			},
 		},
-	}
+		nil
 }
 
 func (s *Server) Run(address string) error {
 	listener, errListen := net.Listen("tcp", address)
 	if errListen != nil {
-		return fmt.Errorf(
-			"listener start: %w",
-			errListen,
-		)
+		return fmt.Errorf("listener start: %w", errListen)
 	}
 	defer listener.Close()
 
-	log.Printf("Listening on %s...", address)
+	listenerTLS := tls.NewListener(listener, s.tlsConfig)
+	defer listenerTLS.Close()
+
+	log.Printf("Listening on %s (HTTPS)...", address)
 
 	for {
-		conn, err := listener.Accept()
+		conn, err := listenerTLS.Accept()
 		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
+			log.Printf("failed to accept connection: %v", err)
 
 			continue
 		}
@@ -73,8 +89,9 @@ func (s *Server) SendStatus(statusCode int) []byte {
 	buffer.Reset()
 
 	buffer.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, http.StatusText(statusCode)))
-	buffer.WriteString("Content-Length: 0\r\n") // No body, so Content-Length is 0
-	buffer.WriteString("\r\n")                  // Blank line to terminate headers
+	buffer.WriteString("Content-Length: 0\r\n")
+	buffer.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123))) // Add Date header
+	buffer.WriteString("\r\n")
 
 	return buffer.Bytes()
 }
@@ -86,7 +103,8 @@ func (s *Server) SendBody(statusCode int, body string) []byte {
 
 	buffer.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, http.StatusText(statusCode)))
 	buffer.WriteString(fmt.Sprintf("Content-Length: %d\r\n", len(body)))
-	buffer.WriteString("\r\n") // Blank line between headers and body
+	buffer.WriteString(fmt.Sprintf("Date: %s\r\n", time.Now().Format(time.RFC1123))) // Add Date header
+	buffer.WriteString("\r\n")
 	buffer.WriteString(body)
 
 	return buffer.Bytes()
@@ -95,27 +113,29 @@ func (s *Server) SendBody(statusCode int, body string) []byte {
 func (s *Server) onTraffic(conn *Connection) error {
 	data, errRead := conn.Read()
 	if errRead != nil {
-		return errRead
+		if errRead == io.EOF {
+			return nil // client closed the connection gracefully
+		}
+
+		return errRead // actual read error
 	}
 
-	_, errParse := NewHTTPRequest(string(data))
+	bufReader := bufio.NewReader(bytes.NewReader(data))
+
+	req, errParse := http.ReadRequest(bufReader)
 	if errParse != nil {
-		log.Printf("failed to parse HTTP request: %v", errParse)
+		go log.Printf("failed to parse HTTP request: %v", errParse)
 
-		_ = conn.Write(
-			[]byte(
-				"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n",
-			),
-		)
+		_ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 
-		return nil
+		return nil // Don't close the connection on a bad request
 	}
 
-	// go log.Printf("Received HTTP request: %v", request)
+	_ = conn.Write(s.SendStatus(http.StatusOK))
 
-	return conn.Write(
-		s.SendStatus(
-			http.StatusOK,
-		),
-	)
+	if strings.ToLower(req.Header.Get("Connection")) == "close" {
+		return io.EOF // Signal to close the connection
+	}
+
+	return nil // Keep the connection open
 }

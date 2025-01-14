@@ -13,11 +13,11 @@ type HTTPRequest struct {
 	Body    string
 }
 
-func NewHTTPRequest(raw string) (*HTTPRequest, error) {
+func NewHTTPSRequest(raw string) (*HTTPRequest, error) {
 	lines := strings.Split(raw, "\r\n")
 
 	if len(lines) < 1 {
-		return nil, fmt.Errorf("invalid HTTP request")
+		return nil, fmt.Errorf("invalid HTTPS request")
 	}
 
 	// Parse the request line

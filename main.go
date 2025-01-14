@@ -1,11 +1,18 @@
 package main
 
-import (
-	"log"
-)
+import "log"
 
 func main() {
-	server := NewServer()
+	certFile := "cert.pem" // Path to your certificate file
+	keyFile := "key.pem"   // Path to your key file
+	address := ":443"
 
-	log.Fatal(server.Run(":8080"))
+	server, errCrServer := NewServer(certFile, keyFile)
+	if errCrServer != nil {
+		log.Fatal(errCrServer)
+	}
+
+	if errRun := server.Run(address); errRun != nil {
+		log.Fatal(errRun)
+	}
 }

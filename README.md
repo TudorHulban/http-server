@@ -8,7 +8,7 @@ telnet localhost 8080
 
 Check that the connection times out after set interval.  
 
-## Test
+## Test HTTP
 
 ```sh
 hey -z 3s -c 50 http://localhost:8080
@@ -59,4 +59,10 @@ Details (average, fastest, slowest):
 
 Status code distribution:
   [200]	803410 responses
+```
+
+## Test HTTPS
+
+```sh
+curl -k -v https://localhost:443
 ```
