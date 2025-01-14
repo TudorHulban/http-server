@@ -58,7 +58,12 @@ func (s *Server) Run(address string) error {
 	listenerTLS := tls.NewListener(listener, s.tlsConfig)
 	defer listenerTLS.Close()
 
-	log.Printf("Listening on %s (HTTPS)...", address)
+	log.Printf(
+		"Server %s listening on %s (HTTPS)...\n",
+
+		_Version,
+		address,
+	)
 
 	for {
 		conn, err := listenerTLS.Accept()
@@ -146,7 +151,7 @@ func (s *Server) onTraffic(conn *connection) error {
 	go func() {
 		fmt.Printf(
 			"IP: %s, Method: %s, Path: %s\n",
-			request.Host,
+			getClientIP(request),
 			request.Method,
 			request.URL.Path,
 		)

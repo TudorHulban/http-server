@@ -65,4 +65,5 @@ Status code distribution:
 
 ```sh
 curl -k -v https://localhost:443
+curl -k -H "X-Forwarded-For: 192.168.1.100" https://localhost:443/
 ```
