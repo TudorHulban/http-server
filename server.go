@@ -6,10 +6,23 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
-type Server struct{}
+type Server struct {
+	bufferPool sync.Pool
+}
+
+func NewServer() *Server {
+	return &Server{
+		bufferPool: sync.Pool{
+			New: func() interface{} {
+				return bytes.NewBuffer(nil)
+			},
+		},
+	}
+}
 
 func (s *Server) Run(address string) error {
 	listener, errListen := net.Listen("tcp", address)
@@ -55,7 +68,9 @@ func (s *Server) handleConnection(conn *Connection) {
 }
 
 func (s *Server) SendStatus(statusCode int) []byte {
-	var buffer bytes.Buffer
+	buffer := s.bufferPool.Get().(*bytes.Buffer)
+	defer s.bufferPool.Put(buffer)
+	buffer.Reset()
 
 	buffer.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, http.StatusText(statusCode)))
 	buffer.WriteString("Content-Length: 0\r\n") // No body, so Content-Length is 0
@@ -65,7 +80,9 @@ func (s *Server) SendStatus(statusCode int) []byte {
 }
 
 func (s *Server) SendBody(statusCode int, body string) []byte {
-	var buffer bytes.Buffer
+	buffer := s.bufferPool.Get().(*bytes.Buffer)
+	defer s.bufferPool.Put(buffer)
+	buffer.Reset()
 
 	buffer.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, http.StatusText(statusCode)))
 	buffer.WriteString(fmt.Sprintf("Content-Length: %d\r\n", len(body)))
