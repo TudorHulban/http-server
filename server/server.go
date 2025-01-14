@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/TudorHulban/https-server/router"
 )
 
 type Server struct {
@@ -19,6 +21,8 @@ type Server struct {
 	readerPool sync.Pool
 
 	tlsConfig *tls.Config
+
+	router *router.Router
 }
 
 func NewServer(certFile, keyFile string) (*Server, error) {
@@ -44,11 +48,28 @@ func NewServer(certFile, keyFile string) (*Server, error) {
 				Certificates: []tls.Certificate{cert},
 				MinVersion:   tls.VersionTLS12,
 			},
+
+			router: router.NewRouter(),
 		},
 		nil
 }
 
-func (s *Server) Run(address string) error {
+func (s *Server) worker(chConnection chan *connection) {
+	for conn := range chConnection {
+		defer conn.Close()
+
+		for {
+			if errOnTraffic := s.onTraffic(conn); errOnTraffic != nil {
+				break
+			}
+
+			// Set a read deadline for idle connections
+			_ = conn.SetReadDeadline(time.Now().Add(1000 * time.Millisecond))
+		}
+	}
+}
+
+func (s *Server) Run(address string, workerCount, channelCapacity int) error {
 	listener, errListen := net.Listen("tcp", address)
 	if errListen != nil {
 		return fmt.Errorf("listener start: %w", errListen)
@@ -65,6 +86,15 @@ func (s *Server) Run(address string) error {
 		address,
 	)
 
+	// Create a channel for queuing connections
+	chConnections := make(chan *connection, channelCapacity)
+	defer close(chConnections)
+
+	// Start worker goroutines
+	for i := 0; i < workerCount; i++ {
+		go s.worker(chConnections)
+	}
+
 	for {
 		conn, err := listenerTLS.Accept()
 		if err != nil {
@@ -73,22 +103,16 @@ func (s *Server) Run(address string) error {
 			continue
 		}
 
-		go s.handleConnection(
-			newConnection(conn),
-		)
-	}
-}
+		select {
+		case chConnections <- newConnection(conn):
 
-func (s *Server) handleConnection(conn *connection) {
-	defer conn.Close()
-
-	for {
-		if errOnTraffic := s.onTraffic(conn); errOnTraffic != nil {
-			break
+		default:
+			log.Printf(
+				"connection queue is full, rejecting connection from: %s",
+				conn.RemoteAddr().String(),
+			)
+			conn.Close()
 		}
-
-		// Set a read deadline for idle connections
-		_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	}
 }
 
@@ -145,6 +169,22 @@ func (s *Server) onTraffic(conn *connection) error {
 		return nil // Don't close the connection on a bad request
 	}
 
+	if request.Method != "GET" && request.Method != "HEAD" {
+		// Read the body only if necessary
+		body, err := io.ReadAll(bufReader)
+		if err != nil {
+			go log.Printf("failed to read request body: %v", err)
+
+			_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+
+			return nil
+		}
+
+		// Now request object has complete data including body
+		// Process the body here (if needed)
+		request.Body = io.NopCloser(bytes.NewReader(body))
+	}
+
 	// go func() {
 	// 	fmt.Printf(
 	// 		"IP: %s, Method: %s, Path: %s\n",
@@ -154,7 +194,21 @@ func (s *Server) onTraffic(conn *connection) error {
 	// 	)
 	// }()
 
-	_, _ = conn.Write(s.SendStatus(http.StatusOK))
+	if handler, exists := s.router.FindHandler(request.URL.Path); exists {
+		buf := bytes.NewBuffer(nil)
+		rw := &responseWriter{w: bufio.NewWriter(buf)}
+
+		handler(rw, request)
+		rw.w.Flush()
+
+		_, err := conn.Write(buf.Bytes())
+		if err != nil {
+			return fmt.Errorf("failed to write response: %w", err)
+		}
+
+	} else {
+		_, _ = conn.Write(s.SendStatus(http.StatusNotFound))
+	}
 
 	if strings.ToLower(request.Header.Get("Connection")) == "close" {
 		return io.EOF // Signal to close the connection
