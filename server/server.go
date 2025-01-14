@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -16,7 +16,9 @@ import (
 
 type Server struct {
 	bufferPool sync.Pool
-	tlsConfig  *tls.Config
+	readerPool sync.Pool
+
+	tlsConfig *tls.Config
 }
 
 func NewServer(certFile, keyFile string) (*Server, error) {
@@ -32,9 +34,15 @@ func NewServer(certFile, keyFile string) (*Server, error) {
 					return bytes.NewBuffer(nil)
 				},
 			},
+			readerPool: sync.Pool{
+				New: func() interface{} {
+					return bufio.NewReader(nil)
+				},
+			},
 
 			tlsConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
 			},
 		},
 		nil
@@ -61,25 +69,24 @@ func (s *Server) Run(address string) error {
 		}
 
 		go s.handleConnection(
-			NewConnection(conn),
+			newConnection(conn),
 		)
 	}
 }
 
-func (s *Server) handleConnection(conn *Connection) {
+func (s *Server) handleConnection(conn *connection) {
 	defer conn.Close()
 
 	// Set a read deadline for idle connections
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 	for {
 		if errOnTraffic := s.onTraffic(conn); errOnTraffic != nil {
-
 			break
 		}
 
 		// Reset the timeout after successful activity
-		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	}
 }
 
@@ -110,7 +117,7 @@ func (s *Server) SendBody(statusCode int, body string) []byte {
 	return buffer.Bytes()
 }
 
-func (s *Server) onTraffic(conn *Connection) error {
+func (s *Server) onTraffic(conn *connection) error {
 	data, errRead := conn.Read()
 	if errRead != nil {
 		if errRead == io.EOF {
@@ -120,20 +127,34 @@ func (s *Server) onTraffic(conn *Connection) error {
 		return errRead // actual read error
 	}
 
-	bufReader := bufio.NewReader(bytes.NewReader(data))
+	bufReader := s.readerPool.Get().(*bufio.Reader)
+	defer func() {
+		bufReader.Reset(nil)
+		s.readerPool.Put(bufReader)
+	}()
+	bufReader.Reset(bytes.NewReader(data))
 
-	req, errParse := http.ReadRequest(bufReader)
+	request, errParse := http.ReadRequest(bufReader)
 	if errParse != nil {
 		go log.Printf("failed to parse HTTP request: %v", errParse)
 
-		_ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 
 		return nil // Don't close the connection on a bad request
 	}
 
-	_ = conn.Write(s.SendStatus(http.StatusOK))
+	go func() {
+		fmt.Printf(
+			"IP: %s, Method: %s, Path: %s\n",
+			request.Host,
+			request.Method,
+			request.URL.Path,
+		)
+	}()
 
-	if strings.ToLower(req.Header.Get("Connection")) == "close" {
+	_, _ = conn.Write(s.SendStatus(http.StatusOK))
+
+	if strings.ToLower(request.Header.Get("Connection")) == "close" {
 		return io.EOF // Signal to close the connection
 	}
 
