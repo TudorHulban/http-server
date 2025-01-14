@@ -1,0 +1,23 @@
+# Binaries and build output
+server-hx
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go modules
+vendor/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.out
+
+# IDE/editor settings and files
+.vscode/
+.idea/
+*.swp
+
+# OS-specific files
+.DS_Store
+Thumbs.db
